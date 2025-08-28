@@ -9,6 +9,7 @@ use miden_private_transport_node::{Node, NodeConfig, node::grpc::GrpcServerConfi
 use rand::Rng;
 use tokio::{task::JoinHandle, time::sleep};
 
+#[allow(dead_code)]
 pub const TAG_LOCALANY: u32 = 0xc000_0000;
 
 #[allow(dead_code)]

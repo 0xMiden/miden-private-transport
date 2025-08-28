@@ -15,6 +15,23 @@ pub struct EncryptedNoteTimestamped {
     #[prost(message, optional, tag = "3")]
     pub timestamp: ::core::option::Option<::prost_types::Timestamp>,
 }
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct EncryptionKey {
+    #[prost(oneof = "encryption_key::Value", tags = "1, 2, 3")]
+    pub value: ::core::option::Option<encryption_key::Value>,
+}
+/// Nested message and enum types in `EncryptionKey`.
+pub mod encryption_key {
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum Value {
+        #[prost(bytes, tag = "1")]
+        Aes256gcm(::prost::alloc::vec::Vec<u8>),
+        #[prost(bytes, tag = "2")]
+        X25519Pub(::prost::alloc::vec::Vec<u8>),
+        #[prost(bytes, tag = "3")]
+        Other(::prost::alloc::vec::Vec<u8>),
+    }
+}
 /// API request for sending a note
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SendNoteRequest {
@@ -67,13 +84,38 @@ pub struct StatsResponse {
 /// Statistics for a specific tag
 #[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct TagStats {
-    /// NoteTag as hex string
     #[prost(uint32, tag = "1")]
     pub tag: u32,
     #[prost(uint64, tag = "2")]
     pub note_count: u64,
     #[prost(message, optional, tag = "3")]
     pub last_activity: ::core::option::Option<::prost_types::Timestamp>,
+}
+/// API request for registering a key
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct RegisterKeyRequest {
+    #[prost(message, optional, tag = "1")]
+    pub account_id: ::core::option::Option<super::account::AccountId>,
+    #[prost(message, optional, tag = "2")]
+    pub encryption_key: ::core::option::Option<EncryptionKey>,
+}
+/// API response for registering a key
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+pub struct RegisterKeyResponse {
+    #[prost(enumeration = "RegisterKeyStatus", tag = "1")]
+    pub status: i32,
+}
+/// API request for getting a registered key
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct FetchKeyRequest {
+    #[prost(message, optional, tag = "1")]
+    pub account_id: ::core::option::Option<super::account::AccountId>,
+}
+/// API response for getting a registered key
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct FetchKeyResponse {
+    #[prost(message, optional, tag = "1")]
+    pub encryption_key: ::core::option::Option<EncryptionKey>,
 }
 /// Note status enum
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
@@ -98,6 +140,32 @@ impl NoteStatus {
         match value {
             "SENT" => Some(Self::Sent),
             "DUPLICATE" => Some(Self::Duplicate),
+            _ => None,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum RegisterKeyStatus {
+    Accepted = 0,
+    Rejected = 1,
+}
+impl RegisterKeyStatus {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Accepted => "ACCEPTED",
+            Self::Rejected => "REJECTED",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "ACCEPTED" => Some(Self::Accepted),
+            "REJECTED" => Some(Self::Rejected),
             _ => None,
         }
     }
@@ -265,6 +333,45 @@ pub mod miden_private_transport_client {
                 .insert(GrpcMethod::new("miden_private_transport.MidenPrivateTransport", "Stats"));
             self.inner.unary(req, path, codec).await
         }
+        /// Register a key to the server
+        pub async fn register_key(
+            &mut self,
+            request: impl tonic::IntoRequest<super::RegisterKeyRequest>,
+        ) -> std::result::Result<tonic::Response<super::RegisterKeyResponse>, tonic::Status>
+        {
+            self.inner.ready().await.map_err(|e| {
+                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
+            })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/miden_private_transport.MidenPrivateTransport/RegisterKey",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut().insert(GrpcMethod::new(
+                "miden_private_transport.MidenPrivateTransport",
+                "RegisterKey",
+            ));
+            self.inner.unary(req, path, codec).await
+        }
+        /// Get a registered key from the server
+        pub async fn fetch_key(
+            &mut self,
+            request: impl tonic::IntoRequest<super::FetchKeyRequest>,
+        ) -> std::result::Result<tonic::Response<super::FetchKeyResponse>, tonic::Status> {
+            self.inner.ready().await.map_err(|e| {
+                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
+            })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/miden_private_transport.MidenPrivateTransport/FetchKey",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut().insert(GrpcMethod::new(
+                "miden_private_transport.MidenPrivateTransport",
+                "FetchKey",
+            ));
+            self.inner.unary(req, path, codec).await
+        }
     }
 }
 /// Generated server implementations.
@@ -301,6 +408,16 @@ pub mod miden_private_transport_server {
             &self,
             request: tonic::Request<()>,
         ) -> std::result::Result<tonic::Response<super::StatsResponse>, tonic::Status>;
+        /// Register a key to the server
+        async fn register_key(
+            &self,
+            request: tonic::Request<super::RegisterKeyRequest>,
+        ) -> std::result::Result<tonic::Response<super::RegisterKeyResponse>, tonic::Status>;
+        /// Get a registered key from the server
+        async fn fetch_key(
+            &self,
+            request: tonic::Request<super::FetchKeyRequest>,
+        ) -> std::result::Result<tonic::Response<super::FetchKeyResponse>, tonic::Status>;
     }
     /// gRPC service definition
     #[derive(Debug)]
@@ -515,6 +632,89 @@ pub mod miden_private_transport_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = StatsSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                },
+                "/miden_private_transport.MidenPrivateTransport/RegisterKey" => {
+                    #[allow(non_camel_case_types)]
+                    struct RegisterKeySvc<T: MidenPrivateTransport>(pub Arc<T>);
+                    impl<T: MidenPrivateTransport>
+                        tonic::server::UnaryService<super::RegisterKeyRequest>
+                        for RegisterKeySvc<T>
+                    {
+                        type Response = super::RegisterKeyResponse;
+                        type Future = BoxFuture<tonic::Response<Self::Response>, tonic::Status>;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::RegisterKeyRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as MidenPrivateTransport>::register_key(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = RegisterKeySvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                },
+                "/miden_private_transport.MidenPrivateTransport/FetchKey" => {
+                    #[allow(non_camel_case_types)]
+                    struct FetchKeySvc<T: MidenPrivateTransport>(pub Arc<T>);
+                    impl<T: MidenPrivateTransport>
+                        tonic::server::UnaryService<super::FetchKeyRequest> for FetchKeySvc<T>
+                    {
+                        type Response = super::FetchKeyResponse;
+                        type Future = BoxFuture<tonic::Response<Self::Response>, tonic::Status>;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::FetchKeyRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as MidenPrivateTransport>::fetch_key(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = FetchKeySvc(inner);
                         let codec = tonic::codec::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(

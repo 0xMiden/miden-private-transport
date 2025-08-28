@@ -5,7 +5,9 @@ use sqlx::{Row, SqlitePool};
 use crate::{
     Error, Result,
     database::{DatabaseBackend, DatabaseConfig},
-    types::{NoteHeader, NoteId, NoteTag, StoredNote},
+    types::{
+        AccountId, EncryptionKeyType, NoteHeader, NoteId, NoteTag, StoredEncryptionKey, StoredNote,
+    },
 };
 
 /// `SQLite` implementation of the database backend
@@ -34,6 +36,19 @@ impl DatabaseBackend for SQLiteDB {
                 created_at TEXT NOT NULL,
                 received_at TEXT NOT NULL,
                 received_by TEXT
+            ) STRICT;
+            ",
+        )
+        .execute(&pool)
+        .await?;
+
+        sqlx::query(
+            r"
+            CREATE TABLE IF NOT EXISTS encryption_keys (
+                account_id BLOB PRIMARY KEY,
+                key_type TEXT NOT NULL,
+                key_data BLOB NOT NULL,
+                created_at TEXT NOT NULL
             ) STRICT;
             ",
         )
@@ -185,5 +200,84 @@ impl DatabaseBackend for SQLiteDB {
         .await?;
 
         Ok(count > 0)
+    }
+
+    async fn store_encryption_key(&self, key: &StoredEncryptionKey) -> Result<()> {
+        let key_type_str = match key.key_type {
+            EncryptionKeyType::Aes256Gcm => "aes256gcm",
+            EncryptionKeyType::X25519Pub => "x25519pub",
+            EncryptionKeyType::Other => "other",
+        };
+
+        sqlx::query(
+            r"
+            INSERT OR REPLACE INTO encryption_keys (account_id, key_type, key_data, created_at)
+            VALUES (?, ?, ?, ?)
+            ",
+        )
+        .bind(&key.account_id.to_bytes()[..])
+        .bind(key_type_str)
+        .bind(&key.key_data)
+        .bind(key.created_at.to_rfc3339())
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
+    async fn get_encryption_key(
+        &self,
+        account_id: &AccountId,
+    ) -> Result<Option<StoredEncryptionKey>> {
+        let row = sqlx::query(
+            r"
+            SELECT account_id, key_type, key_data, created_at
+            FROM encryption_keys
+            WHERE account_id = ?
+            ",
+        )
+        .bind(&account_id.to_bytes()[..])
+        .fetch_optional(&self.pool)
+        .await?;
+
+        if let Some(row) = row {
+            let key_type_str: String = row.try_get("key_type")?;
+            let key_type = match key_type_str.as_str() {
+                "aes256gcm" => EncryptionKeyType::Aes256Gcm,
+                "x25519pub" => EncryptionKeyType::X25519Pub,
+                "other" => EncryptionKeyType::Other,
+                _ => {
+                    return Err(Error::Database(sqlx::Error::ColumnDecode {
+                        index: "key_type".to_string(),
+                        source: Box::new(std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            format!("Unknown key type: {key_type_str}"),
+                        )),
+                    }));
+                },
+            };
+
+            let key_data: Vec<u8> = row.try_get("key_data")?;
+            let created_at_str: String = row.try_get("created_at")?;
+            let created_at = DateTime::parse_from_rfc3339(&created_at_str)
+                .map_err(|e| {
+                    Error::Database(sqlx::Error::ColumnDecode {
+                        index: "created_at".to_string(),
+                        source: Box::new(e),
+                    })
+                })?
+                .with_timezone(&Utc);
+
+            let stored_key = StoredEncryptionKey {
+                account_id: *account_id,
+                key_type,
+                key_data,
+                created_at,
+            };
+
+            Ok(Some(stored_key))
+        } else {
+            Ok(None)
+        }
     }
 }

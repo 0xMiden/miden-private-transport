@@ -34,6 +34,12 @@ pub trait TransportClient: Send + Sync {
 
     /// Fetch all notes for a given tag
     async fn fetch_notes(&mut self, tag: NoteTag) -> Result<Vec<NoteInfo>>;
+
+    /// Associate an encryption key with an account ID
+    async fn register_key(&mut self, account_id: AccountId, key: SerializableKey) -> Result<()>;
+
+    /// Fetch the key associated with an account ID
+    async fn fetch_key(&mut self, account_id: AccountId) -> Result<Option<SerializableKey>>;
 }
 
 /// Encryption store trait for managing encryption keys
@@ -211,6 +217,26 @@ impl TransportLayerClient {
         }
 
         Ok(decrypted_notes)
+    }
+
+    /// Register a key to an account ID
+    pub async fn register_key(
+        &mut self,
+        account_id: AccountId,
+        key: SerializableKey,
+    ) -> Result<()> {
+        self.transport_client.register_key(account_id, key).await
+    }
+
+    /// Fetch the key associated with an account ID
+    pub async fn fetch_key(&mut self, account_id: AccountId) -> Result<()> {
+        let key = self.transport_client.fetch_key(account_id).await?.ok_or_else(|| {
+            Error::Generic(anyhow::anyhow!("Encryption key unknown for {account_id}"))
+        })?;
+        self.encryption_store.add_key(&account_id, &key)?;
+        self.database.store_key(&account_id, &key).await?;
+
+        Ok(())
     }
 
     /// Adds a key associated with an account ID to the encryption store and database

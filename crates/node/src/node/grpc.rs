@@ -3,14 +3,15 @@ use std::{net::SocketAddr, sync::Arc};
 use chrono::{DateTime, Utc};
 use miden_objects::utils::{Deserializable, Serializable};
 use miden_private_transport_proto::miden_private_transport::{
-    EncryptedNoteTimestamped, FetchNotesRequest, FetchNotesResponse, HealthResponse,
-    NoteStatus as ProtoNoteStatus, SendNoteRequest, SendNoteResponse, StatsResponse,
-    miden_private_transport_server::MidenPrivateTransportServer,
+    EncryptedNoteTimestamped, FetchKeyRequest, FetchKeyResponse, FetchNotesRequest,
+    FetchNotesResponse, HealthResponse, NoteStatus as ProtoNoteStatus, RegisterKeyRequest,
+    RegisterKeyResponse, RegisterKeyStatus, SendNoteRequest, SendNoteResponse, StatsResponse,
+    encryption_key, miden_private_transport_server::MidenPrivateTransportServer,
 };
 use prost_types;
 use tonic::{Request, Response, Status};
 
-use crate::{Result, database::Database};
+use crate::{Result, database::Database, types::EncryptionKeyType};
 
 pub struct GrpcServer {
     database: Arc<Database>,
@@ -184,5 +185,94 @@ impl miden_private_transport_proto::miden_private_transport::miden_private_trans
             total_tags,
             notes_per_tag: Vec::new(), // TODO: Implement notes_per_tag
         }))
+    }
+
+    async fn register_key(
+        &self,
+        request: Request<RegisterKeyRequest>,
+    ) -> std::result::Result<Response<RegisterKeyResponse>, Status> {
+        let request = request.into_inner();
+
+        let account_id = request.account_id.ok_or_else(|| Status::invalid_argument("Missing account_id"))?;
+        let encryption_key = request.encryption_key.ok_or_else(|| Status::invalid_argument("Missing encryption_key"))?;
+
+        // Convert protobuf account_id to internal type
+        let account_id_bytes = account_id.id;
+        let account_id = miden_objects::account::AccountId::read_from_bytes(&account_id_bytes)
+            .map_err(|e| Status::invalid_argument(format!("Invalid account_id: {e:?}")))?;
+
+        let (key_type, key_data) = match encryption_key.value {
+            Some(encryption_key::Value::Aes256gcm(data)) => {
+                (EncryptionKeyType::Aes256Gcm, data)
+            }
+            Some(encryption_key::Value::X25519Pub(data)) => {
+                (EncryptionKeyType::X25519Pub, data)
+            }
+            Some(encryption_key::Value::Other(data)) => {
+                (EncryptionKeyType::Other, data)
+            }
+            None => return Err(Status::invalid_argument("Missing encryption key value")),
+        };
+
+        // Create stored key
+        let now = Utc::now();
+        let stored_key = crate::types::StoredEncryptionKey {
+            account_id,
+            key_type,
+            key_data,
+            created_at: now,
+        };
+
+        // Store the key
+        self.database
+            .store_encryption_key(&stored_key)
+            .await
+            .map_err(|e| Status::internal(format!("Failed to store encryption key: {e:?}")))?;
+
+        Ok(Response::new(RegisterKeyResponse {
+            status: RegisterKeyStatus::Accepted.into(),
+        }))
+    }
+
+    async fn fetch_key(
+        &self,
+        request: Request<FetchKeyRequest>,
+    ) -> std::result::Result<Response<FetchKeyResponse>, Status> {
+        let request = request.into_inner();
+
+        let account_id = request.account_id.ok_or_else(|| Status::invalid_argument("Missing account_id"))?;
+
+        // Convert protobuf account_id to internal type
+        let account_id_bytes = account_id.id;
+        let account_id = miden_objects::account::AccountId::read_from_bytes(&account_id_bytes)
+            .map_err(|e| Status::invalid_argument(format!("Invalid account_id: {e:?}")))?;
+
+        // Get the key from database
+        let stored_key = self.database
+            .get_encryption_key(&account_id)
+            .await
+            .map_err(|e| Status::internal(format!("Failed to get encryption key: {e:?}")))?;
+
+        let encryption_key = if let Some(stored_key) = stored_key {
+            let key_value = match stored_key.key_type {
+                EncryptionKeyType::Aes256Gcm => {
+                    encryption_key::Value::Aes256gcm(stored_key.key_data)
+                }
+                EncryptionKeyType::X25519Pub => {
+                    encryption_key::Value::X25519Pub(stored_key.key_data)
+                }
+                EncryptionKeyType::Other => {
+                    encryption_key::Value::Other(stored_key.key_data)
+                }
+            };
+
+            Some(miden_private_transport_proto::miden_private_transport::EncryptionKey {
+                value: Some(key_value),
+            })
+        } else {
+            None
+        };
+
+        Ok(Response::new(FetchKeyResponse { encryption_key }))
     }
 }

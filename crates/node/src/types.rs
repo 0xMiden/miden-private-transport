@@ -5,13 +5,23 @@ pub use miden_objects::{
     account::AccountId,
     block::BlockNumber,
     note::{Note, NoteDetails, NoteHeader, NoteId, NoteInclusionProof, NoteTag, NoteType},
+    utils::Serializable,
 };
+use miden_private_transport_proto::miden_private_transport::encryption_key;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum NoteStatus {
     Sent,
     Duplicate,
+}
+
+/// Types of encryption keys supported
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum EncryptionKeyType {
+    Aes256Gcm,
+    X25519Pub,
+    Other,
 }
 
 /// A note stored in the database
@@ -38,6 +48,57 @@ pub struct NoteInfo {
     pub header: NoteHeader,
     pub encrypted_data: Vec<u8>,
     pub created_at: DateTime<Utc>,
+}
+
+/// An encryption key stored in the database
+#[derive(Debug, Clone)]
+pub struct StoredEncryptionKey {
+    pub account_id: AccountId,
+    pub key_type: EncryptionKeyType,
+    pub key_data: Vec<u8>,
+    pub created_at: DateTime<Utc>,
+}
+
+impl StoredEncryptionKey {
+    /// Serialize the account ID to bytes for storage
+    pub fn account_id_bytes(&self) -> Vec<u8> {
+        self.account_id.to_bytes()
+    }
+
+    /// Create from stored data
+    pub fn from_stored(
+        account_id: AccountId,
+        key_type: EncryptionKeyType,
+        key_data: Vec<u8>,
+        created_at: DateTime<Utc>,
+    ) -> Self {
+        Self {
+            account_id,
+            key_type,
+            key_data,
+            created_at,
+        }
+    }
+}
+
+impl From<&encryption_key::Value> for EncryptionKeyType {
+    fn from(value: &encryption_key::Value) -> Self {
+        match value {
+            encryption_key::Value::Aes256gcm(_) => EncryptionKeyType::Aes256Gcm,
+            encryption_key::Value::X25519Pub(_) => EncryptionKeyType::X25519Pub,
+            encryption_key::Value::Other(_) => EncryptionKeyType::Other,
+        }
+    }
+}
+
+impl From<EncryptionKeyType> for encryption_key::Value {
+    fn from(key_type: EncryptionKeyType) -> Self {
+        match key_type {
+            EncryptionKeyType::Aes256Gcm => encryption_key::Value::Aes256gcm(vec![]),
+            EncryptionKeyType::X25519Pub => encryption_key::Value::X25519Pub(vec![]),
+            EncryptionKeyType::Other => encryption_key::Value::Other(vec![]),
+        }
+    }
 }
 
 fn serialize_note_header<S>(note_header: &NoteHeader, serializer: S) -> Result<S::Ok, S::Error>

@@ -2,9 +2,13 @@ use std::{collections::HashMap, time::Duration};
 
 use chrono::{DateTime, Utc};
 use miden_objects::utils::{Deserializable, Serializable};
-use miden_private_transport_proto::miden_private_transport::{
-    EncryptedNote, FetchNotesRequest, SendNoteRequest,
-    miden_private_transport_client::MidenPrivateTransportClient,
+use miden_private_transport_proto::{
+    AccountId as ProtoAccountId,
+    miden_private_transport::{
+        EncryptedNote, EncryptionKey as ProtoEncryptionKey, FetchKeyRequest, FetchNotesRequest,
+        RegisterKeyRequest, SendNoteRequest, encryption_key,
+        miden_private_transport_client::MidenPrivateTransportClient,
+    },
 };
 use prost_types;
 use tonic::{
@@ -14,8 +18,8 @@ use tonic::{
 use tower::timeout::Timeout;
 
 use crate::{
-    Error, Result,
-    types::{NoteHeader, NoteId, NoteInfo, NoteTag},
+    Error, Result, SerializableKey,
+    types::{AccountId, NoteHeader, NoteId, NoteInfo, NoteTag},
 };
 
 #[derive(Clone)]
@@ -129,6 +133,72 @@ impl GrpcClient {
 
         Ok(notes)
     }
+
+    pub async fn register_key(
+        &mut self,
+        account_id: AccountId,
+        key: SerializableKey,
+    ) -> Result<()> {
+        // Convert to proto types
+        let value = match key {
+            SerializableKey::Aes256Gcm(data) => {
+                encryption_key::Value::Aes256gcm(data.as_bytes().to_vec())
+            },
+            SerializableKey::X25519Pub(data) => {
+                encryption_key::Value::X25519Pub(data.as_bytes().to_vec())
+            },
+            SerializableKey::X25519(_) => {
+                return Err(Error::Internal(
+                    "Attempting to register a key pair or private key".to_string(),
+                ));
+            },
+        };
+        let proto_encryption_key = ProtoEncryptionKey { value: Some(value) };
+        let request = RegisterKeyRequest {
+            account_id: Some(ProtoAccountId { id: account_id.to_bytes() }),
+            encryption_key: Some(proto_encryption_key),
+        };
+
+        // Push key
+        self.client.register_key(Request::new(request)).await?;
+
+        Ok(())
+    }
+
+    pub async fn fetch_key(&mut self, account_id: AccountId) -> Result<Option<SerializableKey>> {
+        let request = FetchKeyRequest {
+            account_id: Some(ProtoAccountId { id: account_id.to_bytes() }),
+        };
+
+        // Fetch key
+        let key = self.client.fetch_key(request).await?.into_inner().encryption_key;
+
+        // Convert from proto types
+        let value = key.and_then(|val| val.value);
+        let serkey = if let Some(key) = value {
+            match key {
+                encryption_key::Value::Aes256gcm(data) => {
+                    let key_array: [u8; 32] = data
+                        .try_into()
+                        .map_err(|_| Error::Internal("Invalid AES key length".to_string()))?;
+                    let aes_key = crate::crypto::aes::Aes256GcmKey::new(key_array);
+                    Some(SerializableKey::Aes256Gcm(aes_key))
+                },
+                encryption_key::Value::X25519Pub(data) => {
+                    let key_array: [u8; 32] = data
+                        .try_into()
+                        .map_err(|_| Error::Internal("Invalid X25519 key length".to_string()))?;
+                    let pubkey = crate::crypto::hybrid::X25519PublicKey::from(key_array);
+                    Some(SerializableKey::X25519Pub(pubkey))
+                },
+                encryption_key::Value::Other(_) => None,
+            }
+        } else {
+            None
+        };
+
+        Ok(serkey)
+    }
 }
 
 #[async_trait::async_trait]
@@ -144,5 +214,13 @@ impl super::TransportClient for GrpcClient {
 
     async fn fetch_notes(&mut self, tag: NoteTag) -> Result<Vec<crate::types::NoteInfo>> {
         self.fetch_notes(tag).await
+    }
+
+    async fn register_key(&mut self, account_id: AccountId, key: SerializableKey) -> Result<()> {
+        self.register_key(account_id, key).await
+    }
+
+    async fn fetch_key(&mut self, account_id: AccountId) -> Result<Option<SerializableKey>> {
+        self.fetch_key(account_id).await
     }
 }

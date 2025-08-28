@@ -7,7 +7,7 @@ pub use self::maintenance::DatabaseMaintenance;
 use self::sqlite::SQLiteDB;
 use crate::{
     Result,
-    types::{NoteId, NoteTag, StoredNote},
+    types::{AccountId, NoteId, NoteTag, StoredEncryptionKey, StoredNote},
 };
 
 /// Database operations
@@ -32,6 +32,15 @@ pub trait DatabaseBackend: Send + Sync {
 
     /// Check if a note exists
     async fn note_exists(&self, note_id: NoteId) -> Result<bool>;
+
+    /// Store or update an encryption key for an account
+    async fn store_encryption_key(&self, key: &StoredEncryptionKey) -> Result<()>;
+
+    /// Get an encryption key for an account
+    async fn get_encryption_key(
+        &self,
+        account_id: &AccountId,
+    ) -> Result<Option<StoredEncryptionKey>>;
 }
 
 /// Database manager for the transport layer
@@ -94,6 +103,19 @@ impl Database {
     /// Check if a note exists
     pub async fn note_exists(&self, note_id: NoteId) -> Result<bool> {
         self.backend.note_exists(note_id).await
+    }
+
+    /// Store or update an encryption key for an account
+    pub async fn store_encryption_key(&self, key: &StoredEncryptionKey) -> Result<()> {
+        self.backend.store_encryption_key(key).await
+    }
+
+    /// Get an encryption key for an account
+    pub async fn get_encryption_key(
+        &self,
+        account_id: &AccountId,
+    ) -> Result<Option<StoredEncryptionKey>> {
+        self.backend.get_encryption_key(account_id).await
     }
 }
 
@@ -158,5 +180,51 @@ mod tests {
         let after_timestamp = received_time + chrono::Duration::seconds(1);
         let fetched_notes = db.fetch_notes(TEST_TAG.into(), after_timestamp).await.unwrap();
         assert_eq!(fetched_notes.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_encryption_key_management() {
+        use miden_objects::{account::AccountId, testing::account_id::ACCOUNT_ID_MAX_ZEROES};
+
+        use crate::types::{EncryptionKeyType, StoredEncryptionKey};
+
+        let db = Database::connect(DatabaseConfig::default()).await.unwrap();
+
+        // Create a test account ID
+        let account_id = AccountId::try_from(ACCOUNT_ID_MAX_ZEROES).unwrap();
+
+        // Test storing a key
+        let key = StoredEncryptionKey {
+            account_id,
+            key_type: EncryptionKeyType::Aes256Gcm,
+            key_data: vec![1, 2, 3, 4, 5],
+            created_at: Utc::now(),
+        };
+
+        db.store_encryption_key(&key).await.unwrap();
+
+        // Test retrieving the key
+        let retrieved_key = db.get_encryption_key(&account_id).await.unwrap();
+        assert!(retrieved_key.is_some());
+        let retrieved_key = retrieved_key.unwrap();
+        assert_eq!(retrieved_key.account_id, account_id);
+        assert_eq!(retrieved_key.key_type, EncryptionKeyType::Aes256Gcm);
+        assert_eq!(retrieved_key.key_data, vec![1, 2, 3, 4, 5]);
+
+        // Test updating the key
+        let updated_key = StoredEncryptionKey {
+            account_id,
+            key_type: EncryptionKeyType::X25519Pub,
+            key_data: vec![5, 4, 3, 2, 1],
+            created_at: key.created_at,
+        };
+
+        db.store_encryption_key(&updated_key).await.unwrap();
+
+        let retrieved_key = db.get_encryption_key(&account_id).await.unwrap();
+        assert!(retrieved_key.is_some());
+        let retrieved_key = retrieved_key.unwrap();
+        assert_eq!(retrieved_key.key_type, EncryptionKeyType::X25519Pub);
+        assert_eq!(retrieved_key.key_data, vec![5, 4, 3, 2, 1]);
     }
 }

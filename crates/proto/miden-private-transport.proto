@@ -4,12 +4,18 @@ package miden_private_transport;
 
 import "google/protobuf/timestamp.proto";
 import "google/protobuf/empty.proto";
-import "miden-node/proto/proto/types/note.proto";
+import "types/note.proto";
+import "types/account.proto";
 
 // Note status enum
 enum NoteStatus {
     SENT = 0;
     DUPLICATE = 1;
+}
+
+enum RegisterKeyStatus {
+    ACCEPTED = 0;
+    REJECTED = 1;
 }
 
 message EncryptedNote {
@@ -21,6 +27,14 @@ message EncryptedNoteTimestamped {
     bytes header = 1;
     bytes encrypted_details = 2;
     google.protobuf.Timestamp timestamp = 3;
+}
+
+message EncryptionKey {
+    oneof value {
+        bytes aes256gcm = 1;
+        bytes x25519_pub = 2;
+        bytes other = 3;
+    }
 }
 
 // API request for sending a note
@@ -61,9 +75,30 @@ message StatsResponse {
 
 // Statistics for a specific tag
 message TagStats {
-    uint32 tag = 1;  // NoteTag as hex string
+    uint32 tag = 1;
     uint64 note_count = 2;
     google.protobuf.Timestamp last_activity = 3;
+}
+
+// API request for registering a key
+message RegisterKeyRequest {
+    account.AccountId account_id = 1;
+    EncryptionKey encryption_key = 2;
+}
+
+// API response for registering a key
+message RegisterKeyResponse {
+    RegisterKeyStatus status = 1;
+}
+
+// API request for getting a registered key
+message FetchKeyRequest {
+    account.AccountId account_id = 1;
+}
+
+// API response for getting a registered key
+message FetchKeyResponse {
+    optional EncryptionKey encryption_key = 1;
 }
 
 // gRPC service definition
@@ -79,4 +114,10 @@ service MidenPrivateTransport {
     
     // Get server statistics
     rpc Stats(google.protobuf.Empty) returns (StatsResponse);
+
+    // Register a key to the server
+    rpc RegisterKey(RegisterKeyRequest) returns (RegisterKeyResponse);
+    
+    // Get a registered key from the server
+    rpc FetchKey(FetchKeyRequest) returns (FetchKeyResponse);
 } 
