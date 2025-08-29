@@ -4,7 +4,7 @@ package miden_private_transport;
 
 import "google/protobuf/timestamp.proto";
 import "google/protobuf/empty.proto";
-import "miden-node/proto/proto/types/note.proto";
+import "types/note.proto";
 
 // Note status enum
 enum NoteStatus {
@@ -12,20 +12,25 @@ enum NoteStatus {
     DUPLICATE = 1;
 }
 
-message EncryptedNote {
+// A Note exchanged over the Transport Layer.
+// Includes the full header for NoteId, NoteTag access.
+message TransportNote {
+    // NoteHeader
     bytes header = 1;
-    bytes encrypted_details = 2;
+    // NoteDetails, can be encrypted
+    bytes details = 2;
 }
 
-message EncryptedNoteTimestamped {
-    bytes header = 1;
-    bytes encrypted_details = 2;
-    google.protobuf.Timestamp timestamp = 3;
+message TransportNoteTimestamped {
+    // Note
+    TransportNote note = 1;
+    // Transport Layer timestamp
+    google.protobuf.Timestamp timestamp = 2;
 }
 
 // API request for sending a note
 message SendNoteRequest {
-    EncryptedNote note = 1;
+    TransportNote note = 1;
 }
 
 // API response for sending a note
@@ -36,13 +41,13 @@ message SendNoteResponse {
 
 // API request for fetching notes
 message FetchNotesRequest {
-    uint32 tag = 1;
+    fixed32 tag = 1;
     google.protobuf.Timestamp timestamp = 2;
 }
 
 // API response for fetching notes
 message FetchNotesResponse {
-    repeated EncryptedNoteTimestamped notes = 1;
+    repeated TransportNoteTimestamped notes = 1;
 }
 
 // Server health check response
@@ -61,7 +66,7 @@ message StatsResponse {
 
 // Statistics for a specific tag
 message TagStats {
-    uint32 tag = 1;  // NoteTag as hex string
+    fixed32 tag = 1;
     uint64 note_count = 2;
     google.protobuf.Timestamp last_activity = 3;
 }

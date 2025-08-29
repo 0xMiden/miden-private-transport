@@ -3,8 +3,8 @@ use std::{net::SocketAddr, sync::Arc};
 use chrono::{DateTime, Utc};
 use miden_objects::utils::{Deserializable, Serializable};
 use miden_private_transport_proto::miden_private_transport::{
-    EncryptedNoteTimestamped, FetchNotesRequest, FetchNotesResponse, HealthResponse,
-    NoteStatus as ProtoNoteStatus, SendNoteRequest, SendNoteResponse, StatsResponse,
+    FetchNotesRequest, FetchNotesResponse, HealthResponse, NoteStatus as ProtoNoteStatus,
+    SendNoteRequest, SendNoteResponse, StatsResponse, TransportNote, TransportNoteTimestamped,
     miden_private_transport_server::MidenPrivateTransportServer,
 };
 use prost_types;
@@ -66,24 +66,23 @@ impl miden_private_transport_proto::miden_private_transport::miden_private_trans
     ) -> std::result::Result<Response<SendNoteResponse>, Status> {
         let request = request.into_inner();
 
-        let note = request.note.ok_or_else(|| Status::invalid_argument("Missing note"))?;
+        let proto_note = request.note.ok_or_else(|| Status::invalid_argument("Missing note"))?;
+        let details = proto_note.details;
 
         // Validate note size
-        if note.encrypted_details.len() > self.config.max_note_size {
+        if details.len() > self.config.max_note_size {
             return Err(Status::resource_exhausted("Note too large"));
         }
 
         // Convert protobuf request to internal types
-        let header = miden_objects::note::NoteHeader::read_from_bytes(&note.header)
+        let header = miden_objects::note::NoteHeader::read_from_bytes(&proto_note.header)
             .map_err(|e| Status::invalid_argument(format!("Invalid header: {e:?}")))?;
 
         // Create note for database
         let note = crate::types::StoredNote {
             header,
-            encrypted_data: note.encrypted_details,
+            details,
             created_at: Utc::now(),
-            received_at: Utc::now(),
-            received_by: None,
         };
 
         // Store the note
@@ -128,18 +127,23 @@ impl miden_private_transport_proto::miden_private_transport::miden_private_trans
         let proto_notes: std::result::Result<Vec<_>, Status> = notes
             .into_iter()
             .map(|note| {
-                let nanos = note.received_at.timestamp_subsec_nanos();
+                let nanos = note.created_at.timestamp_subsec_nanos();
                 let nanos_i32 = nanos
                     .try_into()
                     .map_err(|_| Status::internal("Timestamp nanoseconds too large".to_string()))?;
 
-                Ok(EncryptedNoteTimestamped {
+                let pnote = TransportNote {
                     header: note.header.to_bytes(),
-                    encrypted_details: note.encrypted_data,
-                    timestamp: Some(prost_types::Timestamp {
-                        seconds: note.received_at.timestamp(),
+                    details: note.details,
+                };
+                let ptimestamp = prost_types::Timestamp {
+                        seconds: note.created_at.timestamp(),
                         nanos: nanos_i32,
-                    }),
+                    };
+
+                Ok(TransportNoteTimestamped {
+                    note: Some(pnote),
+                    timestamp: Some(ptimestamp),
                 })
             })
             .collect();
