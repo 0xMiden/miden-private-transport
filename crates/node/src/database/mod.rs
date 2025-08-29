@@ -7,6 +7,7 @@ pub use self::maintenance::DatabaseMaintenance;
 use self::sqlite::SQLiteDB;
 use crate::{
     Result,
+    metrics::MetricsDatabase,
     types::{NoteId, NoteTag, StoredNote},
 };
 
@@ -14,7 +15,7 @@ use crate::{
 #[async_trait::async_trait]
 pub trait DatabaseBackend: Send + Sync {
     /// Connect to the database
-    async fn connect(config: DatabaseConfig) -> Result<Self>
+    async fn connect(config: DatabaseConfig, metrics: MetricsDatabase) -> Result<Self>
     where
         Self: Sized;
 
@@ -62,8 +63,8 @@ impl Default for DatabaseConfig {
 
 impl Database {
     /// Connect to a database (with `SQLite` backend)
-    pub async fn connect(config: DatabaseConfig) -> Result<Self> {
-        let backend = SQLiteDB::connect(config).await?;
+    pub async fn connect(config: DatabaseConfig, metrics: MetricsDatabase) -> Result<Self> {
+        let backend = SQLiteDB::connect(config, metrics).await?;
         Ok(Self { backend: Box::new(backend) })
     }
 
@@ -102,11 +103,16 @@ mod tests {
     use chrono::Utc;
 
     use super::*;
-    use crate::types::{TEST_TAG, test_note_header};
+    use crate::{
+        metrics::Metrics,
+        types::{TEST_TAG, test_note_header},
+    };
 
     #[tokio::test]
     async fn test_sqlite_database() {
-        let db = Database::connect(DatabaseConfig::default()).await.unwrap();
+        let db = Database::connect(DatabaseConfig::default(), Metrics::default().db)
+            .await
+            .unwrap();
         let start = Utc::now();
 
         let note = StoredNote {
@@ -134,7 +140,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_fetch_notes_timestamp_filtering() {
-        let db = Database::connect(DatabaseConfig::default()).await.unwrap();
+        let db = Database::connect(DatabaseConfig::default(), Metrics::default().db)
+            .await
+            .unwrap();
 
         // Create a note with a specific received_at time
         let received_time = Utc::now();

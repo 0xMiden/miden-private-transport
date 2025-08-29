@@ -8,6 +8,16 @@
 
 ## Overview
 
+### Telemetry
+
+Metrics and Traces are provided for the Node implementation.
+Data is exported using OpenTelemetry.
+A Docker-based setup is provided, with the following stack:
+- OpenTelemetry Collector;
+- Tempo (Traces);
+- Prometheus (Metrics);
+- Grafana (Visualization).
+
 ### Crates
 
 - `client`: Client implementation.

@@ -83,6 +83,22 @@ check: ## Check all targets and features for errors without code generation
 build: ## Builds all crates and re-builds protobuf bindings for proto crates
 	cargo build --locked --workspace
 
+
+# --- node-docker ---------------------------------------------------------------------------------
+
+.PHONY: docker-node-up
+docker-node-up:
+	docker-compose -f bin/node/docker/docker-compose.yml --project-directory . up -d
+
+.PHONY: docker-node-down
+docker-node-down:
+	docker-compose -f bin/node/docker/docker-compose.yml --project-directory . down
+
+.PHONY: docker-node-restart
+docker-node-restart:
+	docker-compose -f bin/node/docker/docker-compose.yml --project-directory . restart
+
+
 #### # TODO(template) below sections for binary ####
 
 # --- installing ----------------------------------------------------------------------------------

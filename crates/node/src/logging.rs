@@ -2,8 +2,12 @@ use std::str::FromStr;
 
 use anyhow::Result;
 use opentelemetry::trace::TracerProvider as _;
-use opentelemetry_otlp::WithTonicConfig;
-use opentelemetry_sdk::{propagation::TraceContextPropagator, trace::SpanExporter};
+use opentelemetry_otlp::WithExportConfig;
+use opentelemetry_sdk::{
+    metrics::{PeriodicReader, SdkMeterProvider},
+    propagation::TraceContextPropagator,
+    trace::SpanExporter,
+};
 use tracing::subscriber::Subscriber;
 use tracing_opentelemetry::OpenTelemetryLayer;
 use tracing_subscriber::{
@@ -12,15 +16,50 @@ use tracing_subscriber::{
 };
 
 /// Configures [`setup_tracing`] to enable or disable the open-telemetry exporter.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
+pub struct TracingConfig {
+    pub otel: OpenTelemetry,
+    pub json_format: bool,
+}
+
+/// Open Telemetry configuration
+#[derive(Clone)]
 pub enum OpenTelemetry {
-    Enabled,
+    Enabled { traces_endpoint: String },
     Disabled,
 }
 
+impl TracingConfig {
+    pub fn from_env() -> Self {
+        let otel = {
+            let otel_enabled = std::env::var("OTEL_ENABLED")
+                .unwrap_or_else(|_| "false".to_string())
+                .parse()
+                .unwrap_or(false);
+            if otel_enabled {
+                OpenTelemetry::Enabled {
+                    traces_endpoint: std::env::var("OTEL_TRACES_ENDPOINT")
+                        .ok()
+                        .unwrap_or("http://localhost:4317".to_string()),
+                }
+            } else {
+                OpenTelemetry::Disabled
+            }
+        };
+
+        TracingConfig {
+            otel,
+            json_format: std::env::var("JSON_LOGGING")
+                .unwrap_or_else(|_| "false".to_string())
+                .parse()
+                .unwrap_or(false),
+        }
+    }
+}
+
 impl OpenTelemetry {
-    fn is_enabled(self) -> bool {
-        matches!(self, OpenTelemetry::Enabled)
+    pub fn is_enabled(&self) -> bool {
+        matches!(self, OpenTelemetry::Enabled { .. })
     }
 }
 
@@ -31,30 +70,63 @@ impl OpenTelemetry {
 ///
 /// The open-telemetry configuration is controlled via environment variables as defined in the
 /// [specification](https://github.com/open-telemetry/opentelemetry-specification/blob/main/specification/protocol/exporter.md#opentelemetry-protocol-exporter)
-pub fn setup_tracing(otel: OpenTelemetry) -> Result<()> {
-    if otel.is_enabled() {
+pub fn setup_tracing(cfg: TracingConfig) -> Result<()> {
+    if cfg.otel.is_enabled() {
         opentelemetry::global::set_text_map_propagator(TraceContextPropagator::new());
+
+        // Setup metrics export if OTEL is enabled
+        setup_metrics_export(&cfg.otel)?;
     }
 
     // Note: open-telemetry requires a tokio-runtime, so this _must_ be lazily evaluated (aka not
     // `then_some`) to avoid crashing sync callers (with OpenTelemetry::Disabled set). Examples of
     // such callers are tests with logging enabled.
     let otel_layer = {
-        if otel.is_enabled() {
-            let exporter = opentelemetry_otlp::SpanExporter::builder()
+        if let OpenTelemetry::Enabled { traces_endpoint } = cfg.otel {
+            let exporter_builder = opentelemetry_otlp::SpanExporter::builder()
                 .with_tonic()
-                .with_tls_config(tonic::transport::ClientTlsConfig::new().with_native_roots())
-                .build()?;
-            Some(open_telemetry_layer(exporter))
+                .with_endpoint(traces_endpoint);
+
+            match exporter_builder.build() {
+                Ok(exporter) => {
+                    Some(open_telemetry_layer(exporter, "miden-private-transport-node".to_string()))
+                },
+                Err(_) => None,
+            }
         } else {
             None
         }
     };
 
     let subscriber = Registry::default()
-        .with(stdout_layer().with_filter(env_or_default_filter()))
+        .with(stdout_layer(cfg.json_format).with_filter(env_or_default_filter()))
         .with(otel_layer.with_filter(env_or_default_filter()));
+
     tracing::subscriber::set_global_default(subscriber).map_err(Into::into)
+}
+
+/// Setup OpenTelemetry metrics export using the proper SDK API
+fn setup_metrics_export(otel_cfg: &OpenTelemetry) -> Result<()> {
+    if let OpenTelemetry::Enabled { traces_endpoint } = otel_cfg {
+        // Configure OTLP metrics pipeline
+        let exporter = opentelemetry_otlp::MetricExporter::builder()
+            .with_tonic()
+            .with_endpoint(traces_endpoint)
+            .build()?;
+
+        let provider = SdkMeterProvider::builder()
+            .with_reader(
+                PeriodicReader::builder(exporter)
+                    .with_interval(std::time::Duration::from_secs(5)) // Push interval
+                    .build(),
+            )
+            .build();
+
+        // Set the meter provider globally
+        opentelemetry::global::set_meter_provider(provider);
+    }
+
+    Ok(())
 }
 
 /// Initializes tracing to a test exporter.
@@ -73,9 +145,9 @@ pub fn setup_test_tracing() -> Result<(
     let (exporter, rx_export, rx_shutdown) =
         opentelemetry_sdk::testing::trace::new_tokio_test_exporter();
 
-    let otel_layer = open_telemetry_layer(exporter);
+    let otel_layer = open_telemetry_layer(exporter, "test-service".to_string());
     let subscriber = Registry::default()
-        .with(stdout_layer().with_filter(env_or_default_filter()))
+        .with(stdout_layer(true).with_filter(env_or_default_filter()))
         .with(otel_layer.with_filter(env_or_default_filter()));
     tracing::subscriber::set_global_default(subscriber)?;
     Ok((rx_export, rx_shutdown))
@@ -83,35 +155,53 @@ pub fn setup_test_tracing() -> Result<(
 
 fn open_telemetry_layer<S>(
     exporter: impl SpanExporter + 'static,
+    service_name: String,
 ) -> Box<dyn tracing_subscriber::Layer<S> + Send + Sync + 'static>
 where
     S: Subscriber + Sync + Send,
     for<'a> S: tracing_subscriber::registry::LookupSpan<'a>,
 {
-    let tracer = opentelemetry_sdk::trace::SdkTracerProvider::builder()
+    let provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
         .with_batch_exporter(exporter)
         .build();
 
-    let tracer = tracer.tracer("tracing-otel-subscriber");
+    let tracer = provider.tracer(service_name);
+
+    // Set the tracer provider globally
+    opentelemetry::global::set_tracer_provider(provider);
+
     OpenTelemetryLayer::new(tracer).boxed()
 }
 
-fn stdout_layer<S>() -> Box<dyn tracing_subscriber::Layer<S> + Send + Sync + 'static>
+fn stdout_layer<S>(
+    json_logging: bool,
+) -> Box<dyn tracing_subscriber::Layer<S> + Send + Sync + 'static>
 where
     S: Subscriber,
     for<'a> S: tracing_subscriber::registry::LookupSpan<'a>,
 {
     use tracing_subscriber::fmt::format::FmtSpan;
 
-    tracing_subscriber::fmt::layer()
-        .pretty()
-        .compact()
-        .with_level(true)
-        .with_file(true)
-        .with_line_number(true)
-        .with_target(true)
-        .with_span_events(FmtSpan::CLOSE)
-        .boxed()
+    if json_logging {
+        tracing_subscriber::fmt::layer()
+            .with_level(true)
+            .with_file(true)
+            .with_line_number(true)
+            .with_target(true)
+            .with_span_events(FmtSpan::CLOSE)
+            .json()
+            .boxed()
+    } else {
+        tracing_subscriber::fmt::layer()
+            .pretty()
+            .compact()
+            .with_level(true)
+            .with_file(true)
+            .with_line_number(true)
+            .with_target(true)
+            .with_span_events(FmtSpan::CLOSE)
+            .boxed()
+    }
 }
 
 /// Creates a filter from the `RUST_LOG` env var with a default of `INFO` if unset.

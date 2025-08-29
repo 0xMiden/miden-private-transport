@@ -1,0 +1,91 @@
+services:
+  # Miden Private Transport Node
+  miden-private-transport-node:
+    build:
+      context: .
+      dockerfile: bin/node/docker/Dockerfile
+    ports:
+      - "8080:8080"  # gRPC
+      - "9091:9090"  # Health checks
+    environment:
+      - OTEL_ENABLED=true
+      - JSON_LOGGING=true
+      - OTEL_TRACES_ENDPOINT=http://otel-collector:4317
+      - OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
+      - OTEL_SERVICE_NAME=miden-private-transport-node
+      - RUST_LOG=INFO
+      - DOCKER_ENV=true
+      - DATABASE_URL=/app/data/node.db
+    volumes:
+      - node_data:/app/data
+    depends_on:
+      - otel-collector
+    networks:
+      - telemetry
+
+  # OpenTelemetry Collector
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:latest
+    volumes:
+      - ./bin/node/docker/otel-collector-config.yaml:/etc/otelcol-contrib/config.yaml:ro
+    ports:
+      - "4317:4317"     # OTLP gRPC receiver (apps send traces here)
+      - "4318:4318"     # OTLP HTTP receiver
+      - "13133:13133"   # Health check
+      - "1777:1777"     # pprof
+      - "9464:9464"     # Prometheus metrics
+    depends_on:
+      - tempo
+    networks:
+      - telemetry
+
+  # Traces
+  tempo:
+    image: grafana/tempo:latest
+    command: [ "-config.file=/etc/tempo.yaml" ]
+    volumes:
+      - ./bin/node/docker/tempo.yaml:/etc/tempo.yaml:ro
+    ports:
+      - "3200:3200"   # tempo
+    networks:
+      - telemetry
+
+  # Metrics
+  prometheus:
+    image: prom/prometheus:latest
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+    volumes:
+      - ./bin/node/docker/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+    networks:
+      - telemetry
+    depends_on:
+      - otel-collector
+
+  # Visualization
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - grafana_data:/var/lib/grafana
+    networks:
+      - telemetry
+    depends_on:
+      - tempo
+
+
+volumes:
+  grafana_data:
+  node_data:
+  prometheus_data:
+
+networks:
+  telemetry:
+    driver: bridge

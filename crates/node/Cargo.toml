@@ -39,12 +39,17 @@ prost-types = "0.13"
 sqlx = { features = ["runtime-tokio-rustls", "sqlite"], version = "0.8" }
 
 # Logging
-opentelemetry         = { version = "0.30" }
-opentelemetry-otlp    = { default-features = false, features = ["grpc-tonic", "tls-roots", "trace"], version = "0.30" }
-opentelemetry_sdk     = { features = ["rt-tokio", "testing"], version = "0.30" }
-tracing               = { workspace = true }
+opentelemetry = { version = "0.30" }
+opentelemetry-otlp = { default-features = false, features = [
+  "grpc-tonic",
+  "metrics",
+  "tls-roots",
+  "trace",
+], version = "0.30" }
+opentelemetry_sdk = { features = ["metrics", "rt-tokio", "testing"], version = "0.30" }
+tracing = { workspace = true }
 tracing-opentelemetry = { version = "0.31" }
-tracing-subscriber    = { workspace = true }
+tracing-subscriber = { workspace = true }
 
 # Error handling
 anyhow    = "1.0"

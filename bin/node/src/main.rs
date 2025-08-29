@@ -2,7 +2,7 @@ use clap::Parser;
 use miden_private_transport_node::{
     Node, NodeConfig, Result,
     database::DatabaseConfig,
-    logging::{OpenTelemetry, setup_tracing},
+    logging::{TracingConfig, setup_tracing},
     node::grpc::GrpcServerConfig,
 };
 use tracing::info;
@@ -42,10 +42,12 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    setup_tracing(OpenTelemetry::Disabled)?;
-
     // Parse command line arguments
     let args = Args::parse();
+
+    // Setup tracing
+    let tracing_cfg = TracingConfig::from_env();
+    setup_tracing(tracing_cfg.clone())?;
 
     info!("Starting Miden Transport Node...");
     info!("Host: {}", args.host);
@@ -55,6 +57,11 @@ async fn main() -> Result<()> {
     info!("Retention days: {}", args.retention_days);
     info!("Rate limit: {} requests/minute", args.rate_limit_per_minute);
     info!("Request timeout: {} seconds", args.request_timeout_seconds);
+    info!(
+        "Telemetry: OpenTelemetry={}, JSON={}",
+        tracing_cfg.otel.is_enabled(),
+        tracing_cfg.json_format
+    );
 
     // Create Node config
     let config = NodeConfig {

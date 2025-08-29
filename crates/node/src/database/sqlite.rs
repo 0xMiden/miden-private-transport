@@ -5,17 +5,19 @@ use sqlx::{Row, SqlitePool};
 use crate::{
     Error, Result,
     database::{DatabaseBackend, DatabaseConfig},
+    metrics::MetricsDatabase,
     types::{NoteHeader, NoteId, NoteTag, StoredNote},
 };
 
 /// `SQLite` implementation of the database backend
 pub struct SQLiteDB {
     pool: SqlitePool,
+    metrics: MetricsDatabase,
 }
 
 #[async_trait::async_trait]
 impl DatabaseBackend for SQLiteDB {
-    async fn connect(config: DatabaseConfig) -> Result<Self> {
+    async fn connect(config: DatabaseConfig, metrics: MetricsDatabase) -> Result<Self> {
         if !std::path::Path::new(&config.url).exists() && !config.url.contains(":memory:") {
             std::fs::File::create(&config.url).map_err(crate::Error::Io)?;
         }
@@ -50,10 +52,13 @@ impl DatabaseBackend for SQLiteDB {
         .execute(&pool)
         .await?;
 
-        Ok(Self { pool })
+        Ok(Self { pool, metrics })
     }
 
+    #[tracing::instrument(skip(self), fields(operation = "db.store_note"))]
     async fn store_note(&self, note: &StoredNote) -> Result<()> {
+        let timer = self.metrics.db_store_note();
+
         let received_by_json = if let Some(ref received_by) = note.received_by {
             serde_json::to_string(received_by)?
         } else {
@@ -76,10 +81,15 @@ impl DatabaseBackend for SQLiteDB {
         .execute(&self.pool)
         .await?;
 
+        timer.finish("ok");
+
         Ok(())
     }
 
+    #[tracing::instrument(skip(self), fields(operation = "db.fetch_notes"))]
     async fn fetch_notes(&self, tag: NoteTag, timestamp: DateTime<Utc>) -> Result<Vec<StoredNote>> {
+        let timer = self.metrics.db_fetch_notes();
+
         let query = sqlx::query(
             r"
                 SELECT id, tag, header, encrypted_data, created_at, received_at, received_by
@@ -144,6 +154,8 @@ impl DatabaseBackend for SQLiteDB {
 
             notes.push(note);
         }
+
+        timer.finish("ok");
 
         Ok(notes)
     }
