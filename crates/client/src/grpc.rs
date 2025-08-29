@@ -3,7 +3,7 @@ use std::{collections::HashMap, time::Duration};
 use chrono::{DateTime, Utc};
 use miden_objects::utils::{Deserializable, Serializable};
 use miden_private_transport_proto::miden_private_transport::{
-    EncryptedNote, FetchNotesRequest, SendNoteRequest,
+    FetchNotesRequest, SendNoteRequest, TransportNote,
     miden_private_transport_client::MidenPrivateTransportClient,
 };
 use prost_types;
@@ -41,16 +41,9 @@ impl GrpcClient {
         Ok(Self { client, lts })
     }
 
-    pub async fn send_note(
-        &mut self,
-        header: NoteHeader,
-        encrypted_details: Vec<u8>,
-    ) -> Result<NoteId> {
+    pub async fn send_note(&mut self, header: NoteHeader, details: Vec<u8>) -> Result<NoteId> {
         let request = SendNoteRequest {
-            note: Some(EncryptedNote {
-                header: header.to_bytes(),
-                encrypted_details,
-            }),
+            note: Some(TransportNote { header: header.to_bytes(), details }),
         };
 
         let response = self
@@ -95,12 +88,15 @@ impl GrpcClient {
         let mut notes = Vec::new();
         let mut latest_received_at = ts;
 
-        for note in response.notes {
+        for pts_note in response.notes {
+            let note = pts_note
+                .note
+                .ok_or_else(|| Error::Internal("Fetched note has no data".to_string()))?;
             let header = NoteHeader::read_from_bytes(&note.header)
                 .map_err(|e| Error::Internal(format!("Invalid note header: {e:?}")))?;
 
             // Convert protobuf timestamp to DateTime
-            let received_at = if let Some(timestamp) = note.timestamp {
+            let received_at = if let Some(timestamp) = pts_note.timestamp {
                 chrono::DateTime::from_timestamp(
                     timestamp.seconds,
                     timestamp.nanos.try_into().map_err(|_| {
@@ -119,7 +115,7 @@ impl GrpcClient {
 
             notes.push(NoteInfo {
                 header,
-                encrypted_data: note.encrypted_details,
+                details: note.details,
                 created_at: received_at,
             });
         }
@@ -136,9 +132,9 @@ impl super::TransportClient for GrpcClient {
     async fn send_note(
         &mut self,
         header: NoteHeader,
-        encrypted_note: Vec<u8>,
+        details: Vec<u8>,
     ) -> Result<(NoteId, crate::types::NoteStatus)> {
-        let note_id = self.send_note(header, encrypted_note).await?;
+        let note_id = self.send_note(header, details).await?;
         Ok((note_id, crate::types::NoteStatus::Sent))
     }
 

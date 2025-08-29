@@ -57,10 +57,8 @@ mod tests {
     fn note_at(age: Duration) -> StoredNote {
         StoredNote {
             header: test_note_header(),
-            encrypted_data: vec![1, 2, 3, 4],
+            details: vec![1, 2, 3, 4],
             created_at: Utc::now() - age,
-            received_at: Utc::now() - age,
-            received_by: None,
         }
     }
 

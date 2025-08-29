@@ -28,7 +28,7 @@ pub struct StoredNote {
         deserialize_with = "deserialize_note_header"
     )]
     pub header: NoteHeader,
-    pub encrypted_data: Vec<u8>,
+    pub details: Vec<u8>,
     pub created_at: DateTime<Utc>,
     pub received_at: DateTime<Utc>,
     pub received_by: Option<Vec<String>>,
@@ -42,7 +42,7 @@ pub struct NoteInfo {
         deserialize_with = "deserialize_note_header"
     )]
     pub header: NoteHeader,
-    pub encrypted_data: Vec<u8>,
+    pub details: Vec<u8>,
     pub created_at: DateTime<Utc>,
 }
 

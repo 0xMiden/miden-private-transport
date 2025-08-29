@@ -9,12 +9,12 @@ use crate::{
 };
 
 /// `SQLite` implementation of the database backend
-pub struct SQLiteDB {
+pub struct SqliteDatabase {
     pool: SqlitePool,
 }
 
 #[async_trait::async_trait]
-impl DatabaseBackend for SQLiteDB {
+impl DatabaseBackend for SqliteDatabase {
     async fn connect(config: DatabaseConfig) -> Result<Self> {
         if !std::path::Path::new(&config.url).exists() && !config.url.contains(":memory:") {
             std::fs::File::create(&config.url).map_err(crate::Error::Io)?;
@@ -30,10 +30,8 @@ impl DatabaseBackend for SQLiteDB {
                 id BLOB PRIMARY KEY,
                 tag INTEGER NOT NULL,
                 header BLOB NOT NULL,
-                encrypted_data BLOB NOT NULL,
-                created_at TEXT NOT NULL,
-                received_at TEXT NOT NULL,
-                received_by TEXT
+                details BLOB NOT NULL,
+                created_at TEXT NOT NULL
             ) STRICT;
             ",
         )
@@ -44,7 +42,6 @@ impl DatabaseBackend for SQLiteDB {
             r"
             CREATE INDEX IF NOT EXISTS idx_notes_tag ON notes(tag);
             CREATE INDEX IF NOT EXISTS idx_notes_created_at ON notes(created_at);
-            CREATE INDEX IF NOT EXISTS idx_notes_received_at ON notes(received_at);
             ",
         )
         .execute(&pool)
@@ -54,25 +51,17 @@ impl DatabaseBackend for SQLiteDB {
     }
 
     async fn store_note(&self, note: &StoredNote) -> Result<()> {
-        let received_by_json = if let Some(ref received_by) = note.received_by {
-            serde_json::to_string(received_by)?
-        } else {
-            "[]".to_string()
-        };
-
         sqlx::query(
             r"
-            INSERT INTO notes (id, tag, header, encrypted_data, created_at, received_at, received_by)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO notes (id, tag, header, details, created_at)
+            VALUES (?, ?, ?, ?, ?)
             ",
         )
         .bind(&note.header.id().inner().as_bytes()[..])
         .bind(i64::from(note.header.metadata().tag().as_u32()))
         .bind(note.header.to_bytes())
-        .bind(&note.encrypted_data)
+        .bind(&note.details)
         .bind(note.created_at.to_rfc3339())
-        .bind(note.received_at.to_rfc3339())
-        .bind(received_by_json)
         .execute(&self.pool)
         .await?;
 
@@ -82,10 +71,10 @@ impl DatabaseBackend for SQLiteDB {
     async fn fetch_notes(&self, tag: NoteTag, timestamp: DateTime<Utc>) -> Result<Vec<StoredNote>> {
         let query = sqlx::query(
             r"
-                SELECT id, tag, header, encrypted_data, created_at, received_at, received_by
+                SELECT id, tag, header, details, created_at
                 FROM notes
-                WHERE tag = ? AND received_at > ?
-                ORDER BY received_at ASC
+                WHERE tag = ? AND created_at > ?
+                ORDER BY created_at ASC
                 ",
         )
         .bind(i64::from(tag.as_u32()))
@@ -95,10 +84,8 @@ impl DatabaseBackend for SQLiteDB {
         let mut notes = Vec::new();
 
         for row in rows {
-            let _id_bytes: Vec<u8> = row.try_get("id")?;
-            let _tag: i64 = row.try_get("tag")?;
             let header_bytes: Vec<u8> = row.try_get("header")?;
-            let encrypted_data: Vec<u8> = row.try_get("encrypted_data")?;
+            let details: Vec<u8> = row.try_get("details")?;
             let created_at_str: String = row.try_get("created_at")?;
             let created_at = DateTime::parse_from_rfc3339(&created_at_str)
                 .map_err(|e| {
@@ -109,24 +96,6 @@ impl DatabaseBackend for SQLiteDB {
                 })?
                 .with_timezone(&Utc);
 
-            let received_at_str: String = row.try_get("received_at")?;
-            let received_at = DateTime::parse_from_rfc3339(&received_at_str)
-                .map_err(|e| {
-                    Error::Database(sqlx::Error::ColumnDecode {
-                        index: "received_at".to_string(),
-                        source: Box::new(e),
-                    })
-                })?
-                .with_timezone(&Utc);
-
-            let received_by_json: String = row.try_get("received_by")?;
-
-            let received_by: Option<Vec<String>> = if received_by_json == "[]" {
-                None
-            } else {
-                Some(serde_json::from_str(&received_by_json)?)
-            };
-
             let header = NoteHeader::read_from_bytes(&header_bytes).map_err(|e| {
                 Error::Database(sqlx::Error::ColumnDecode {
                     index: "header".to_string(),
@@ -134,13 +103,7 @@ impl DatabaseBackend for SQLiteDB {
                 })
             })?;
 
-            let note = StoredNote {
-                header,
-                encrypted_data,
-                created_at,
-                received_at,
-                received_by,
-            };
+            let note = StoredNote { header, details, created_at };
 
             notes.push(note);
         }

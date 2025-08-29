@@ -32,7 +32,6 @@ tonic = { workspace = true }
 tower = { features = ["timeout"], version = "0.5" }
 
 # Serialization
-hex        = { workspace = true }
 serde      = { features = ["derive"], version = "1.0" }
 serde_json = "1.0"
 
@@ -41,12 +40,6 @@ prost-types = "0.13"
 
 # Database
 sqlx = { features = ["runtime-tokio-rustls", "sqlite"], version = "0.8" }
-
-# Encryption
-aes-gcm      = "0.10"
-rand         = "0.9"
-sha2         = "0.10"
-x25519-dalek = { features = ["getrandom", "serde", "static_secrets"], version = "2.0" }
 
 # Logging
 opentelemetry         = { version = "0.30" }
@@ -65,6 +58,9 @@ async-trait = "0.1"
 
 # Time handling
 chrono = { features = ["serde"], version = "0.4" }
+
+# Generic
+rand = "0.9"
 
 [dev-dependencies]
 miden-private-transport-node = { workspace = true }
