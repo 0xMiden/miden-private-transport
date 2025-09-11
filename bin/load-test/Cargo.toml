@@ -1,0 +1,29 @@
+[package]
+authors.workspace      = true
+description            = "Miden Private Transport Node Load-Testing Tool"
+edition.workspace      = true
+homepage.workspace     = true
+keywords               = ["messaging", "miden"]
+license.workspace      = true
+name                   = "miden-private-transport-node-load-test"
+readme.workspace       = true
+repository.workspace   = true
+rust-version.workspace = true
+version.workspace      = true
+
+[lints]
+workspace = true
+
+[dependencies]
+# Workspace/local
+miden-private-transport-client = { features = ["sqlite", "tonic"], workspace = true }
+
+# Miden
+miden-objects = { workspace = true }
+
+# External
+anyhow = { workspace = true }
+chrono = { workspace = true }
+clap   = { workspace = true }
+rand   = { workspace = true }
+tokio  = { workspace = true }

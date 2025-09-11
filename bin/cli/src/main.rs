@@ -95,6 +95,9 @@ enum Commands {
         /// Recipient account ID
         #[arg(long)]
         recipient: String,
+        /// Split header / details
+        #[arg(long)]
+        split: bool,
     },
 
     /// Random address (bech32) for testing purposes
@@ -146,8 +149,8 @@ async fn main() -> Result<()> {
             client.register_tag(tag.into())?;
             println!("✅ Tag {tag} registered successfully");
         },
-        Commands::TestNote { recipient } => {
-            mock_note(&recipient)?;
+        Commands::TestNote { recipient, split } => {
+            mock_note(&recipient, split)?;
         },
         Commands::TestAddress => {
             test_address();
@@ -261,13 +264,21 @@ async fn cleanup_old_data(client: &TransportLayerClient, days: u32) -> Result<()
     Ok(())
 }
 
-fn mock_note(recipient_address_bech32: &str) -> Result<()> {
+fn mock_note(recipient_address_bech32: &str, split: bool) -> Result<()> {
     use miden_objects::utils::Serializable;
     let (_, address) = Address::from_bech32(recipient_address_bech32)
         .map_err(|e| anyhow!("Invalid recipient address {recipient_address_bech32}: {e}"))?;
     let note = mock_note_p2id_with_addresses(&mock_address(), &address);
-    let hex_note = hex::encode(note.to_bytes());
-    info!("Test note: {}", hex_note);
+    if split {
+        let hex_note_header = hex::encode(note.header().to_bytes());
+        let hex_note_details = hex::encode(NoteDetails::from(note).to_bytes());
+        info!("Test note header: {}", hex_note_header);
+        info!("Test note details: {}", hex_note_details);
+    } else {
+        let hex_note = hex::encode(note.to_bytes());
+        info!("Test note: {}", hex_note);
+    }
+
     Ok(())
 }
 

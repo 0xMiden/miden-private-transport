@@ -83,7 +83,7 @@ check: ## Check all targets and features for errors without code generation
 
 .PHONY: build
 build: ## Builds all crates and re-builds protobuf bindings for proto crates
-	cargo build --locked --workspace
+	BUILD_PROTO=1 cargo build --locked --workspace --all-targets --exclude miden-private-transport-client-web
 
 
 # --- node-docker ---------------------------------------------------------------------------------

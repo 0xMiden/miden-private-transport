@@ -1910,6 +1910,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "miden-private-transport-node-load-test"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "clap",
+ "miden-objects",
+ "miden-private-transport-client",
+ "rand 0.9.2",
+ "tokio",
+]
+
+[[package]]
 name = "miden-private-transport-proto"
 version = "0.1.0"
 dependencies = [
